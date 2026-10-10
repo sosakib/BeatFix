@@ -1,0 +1,14 @@
+# Build and IDE artifacts
+build/
+out/
+.vs/
+*.user
+*.suo
+bin/
+*.pdb
+*.obj
+*.log
+.cache/
+.ninja_*
+ninja.log
+compile_commands.json
