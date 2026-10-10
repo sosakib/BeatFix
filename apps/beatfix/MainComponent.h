@@ -63,8 +63,8 @@ private:
     juce::TextButton m_source_b_button{"B: Corrected"};
     juce::ToggleButton m_metronome_toggle{"Click (K)"};
     juce::Label m_time_display_label;
-    juce::ProgressBar m_render_progress{m_render_fraction};
     double m_render_fraction = 0.0;
+    juce::ProgressBar m_render_progress{m_render_fraction};
     juce::TextButton m_export_button{"Export..."};
 
     // Modal Export Component
