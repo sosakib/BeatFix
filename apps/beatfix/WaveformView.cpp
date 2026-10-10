@@ -1,4 +1,5 @@
 #include "WaveformView.h"
+#include "BeatFixLookAndFeel.h"
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
@@ -9,7 +10,7 @@ namespace bf::gui {
 WaveformView::WaveformView() {
     startTimerHz(60); // 60 FPS playhead refresh
 
-    m_zoom_out_btn.setButtonText("−");
+    m_zoom_out_btn.setButtonText("-");
     m_zoom_out_btn.onClick = [this] { zoom_out(); };
     addAndMakeVisible(m_zoom_out_btn);
 
@@ -384,11 +385,17 @@ void WaveformView::draw_detail_lane(juce::Graphics& g, juce::Rectangle<int> boun
     g.drawRoundedRectangle(bounds.toFloat(), 8.0f, 1.0f);
 
     // Detail Header Title Tag
-    g.setColour(juce::Colour(0xFFFF334B));
-    g.setFont(juce::Font(14.0f, juce::Font::bold));
+    juce::Rectangle<float> waveIconRect(static_cast<float>(bounds.getX() + 14), static_cast<float>(bounds.getY() + 11), 15.0f, 10.0f);
+    BeatFixLookAndFeel::drawWaveformIcon(g, waveIconRect, juce::Colour(0xFFFF334B));
 
-    juce::String tagText = m_is_corrected_source ? "  📈  Warped (Stretched)" : "  📈  Original (Source)";
-    g.drawText(tagText, bounds.getX() + 12, bounds.getY() + 6, 220, 20, juce::Justification::left);
+    g.setColour(juce::Colour(0xFFFF334B));
+    g.setFont(juce::Font(13.5f, juce::Font::bold));
+    juce::String tagText = m_is_corrected_source ? "Warped (Stretched)" : "Original (Source)";
+    g.drawText(tagText, bounds.getX() + 34, bounds.getY() + 6, 200, 20, juce::Justification::left);
+
+    // Magnifying glass icon to the left of zoom buttons
+    juce::Rectangle<float> searchIconRect(static_cast<float>(m_zoom_out_btn.getX() - 20), static_cast<float>(m_zoom_out_btn.getY() + 4), 13.0f, 13.0f);
+    BeatFixLookAndFeel::drawSearchIcon(g, searchIconRect, juce::Colour(0xFF718096));
 
     // Update zoom reset button text with zoom percentage
     if (m_session && m_session->source_audio().total_frames > 0) {
@@ -490,26 +497,38 @@ void WaveformView::draw_detail_lane(juce::Graphics& g, juce::Rectangle<int> boun
     g.setColour(juce::Colour(0xFF1F2633));
     g.drawHorizontalLine(baseline_y, static_cast<float>(wave_area.getX()), static_cast<float>(wave_area.getRight()));
 
+    double targetBpm = (m_session->target_bpm() > 0.0) ? m_session->target_bpm() : 120.0;
+    double sec_per_beat = 60.0 / targetBpm;
+    double px_per_beat = (sec_per_beat / m_view_duration_sec) * total_w;
+
+    bool canDrawAllNumbers = (px_per_beat >= 24.0);
+    bool canDrawDownbeatNumbers = (px_per_beat * 4.0 >= 28.0);
+    bool canDrawBeatDots = (px_per_beat >= 4.0);
+
     g.setFont(juce::Font(10.0f, juce::Font::bold));
     for (const auto& beat : analysis.beats) {
         if (beat.time_sec >= m_view_start_sec && beat.time_sec <= (m_view_start_sec + m_view_duration_sec)) {
             int x = wave_area.getX() + static_cast<int>(((beat.time_sec - m_view_start_sec) / m_view_duration_sec) * total_w);
 
-            int beat_in_bar = (beat.bar_index >= 0) ? ((int)std::round(std::fmod(beat.time_sec * (m_session->target_bpm() / 60.0), 4.0)) + 1) : 1;
+            int beat_in_bar = (beat.bar_index >= 0) ? ((int)std::round(std::fmod(beat.time_sec * (targetBpm / 60.0), 4.0)) + 1) : 1;
             if (beat_in_bar < 1 || beat_in_bar > 4) beat_in_bar = 1;
 
             if (beat.is_downbeat) {
                 // Large Glowing Red Dot & Bold '1'
                 g.setColour(juce::Colour(0xFFFF334B));
                 g.fillEllipse(static_cast<float>(x - 3), static_cast<float>(baseline_y - 3), 6.0f, 6.0f);
-                g.setColour(juce::Colours::white);
-                g.drawText("1", x - 6, baseline_y + 3, 12, 12, juce::Justification::centred);
-            } else {
+                if (canDrawDownbeatNumbers || canDrawAllNumbers) {
+                    g.setColour(juce::Colours::white);
+                    g.drawText("1", x - 7, baseline_y + 3, 14, 12, juce::Justification::centred);
+                }
+            } else if (canDrawBeatDots) {
                 // Small Red Dot & Beat Number
                 g.setColour(juce::Colour(0xCCFF334B));
                 g.fillEllipse(static_cast<float>(x - 2), static_cast<float>(baseline_y - 2), 4.0f, 4.0f);
-                g.setColour(juce::Colour(0xFF8A99AD));
-                g.drawText(juce::String(beat_in_bar), x - 6, baseline_y + 3, 12, 12, juce::Justification::centred);
+                if (canDrawAllNumbers) {
+                    g.setColour(juce::Colour(0xFF8A99AD));
+                    g.drawText(juce::String(beat_in_bar), x - 7, baseline_y + 3, 14, 12, juce::Justification::centred);
+                }
             }
         }
     }

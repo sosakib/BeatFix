@@ -303,9 +303,9 @@ void MainComponent::paint(juce::Graphics& g) {
             // Card 1: Track Details
             g.setColour(juce::Colour(0xFF1A2230));
             g.fillEllipse(static_cast<float>(content.getX()), static_cast<float>(content.getY() + 4), 28.0f, 28.0f);
-            g.setColour(juce::Colour(0xFFFF334B));
-            g.setFont(juce::Font(14.0f, juce::Font::bold));
-            g.drawText("♫", content.getX(), content.getY() + 4, 28, 28, juce::Justification::centred);
+            
+            // Vector Music Note
+            BeatFixLookAndFeel::drawMusicNoteIcon(g, juce::Rectangle<float>(content.getX() + 6.0f, content.getY() + 8.0f, 16.0f, 16.0f), juce::Colour(0xFFFF334B));
 
             g.setColour(juce::Colours::white);
             g.setFont(juce::Font(12.5f, juce::Font::bold));
@@ -315,15 +315,16 @@ void MainComponent::paint(juce::Graphics& g) {
             g.setFont(juce::Font(10.5f, juce::Font::plain));
             g.drawText(m_track_specs, content.getX() + 34, content.getY() + 20, content.getWidth() - 44, 14, juce::Justification::left, true);
 
-            g.drawText("⌵", content.getRight() - 10, content.getY() + 10, 10, 14, juce::Justification::right);
+            // Vector Chevron Down
+            BeatFixLookAndFeel::drawChevronDown(g, juce::Rectangle<float>(content.getRight() - 14.0f, content.getY() + 15.0f, 8.0f, 5.0f), juce::Colour(0xFF718096));
         } else if (i == 1) {
             // Card 2: Detected BPM
             g.setColour(juce::Colour(0xFF718096));
             g.setFont(juce::Font(11.0f, juce::Font::plain));
             g.drawText("Detected BPM", content.getX(), content.getY(), content.getWidth(), 14, juce::Justification::left);
 
-            g.setColour(juce::Colour(0xFFFF334B));
-            g.drawText("◎", content.getX(), content.getY() + 18, 16, 20, juce::Justification::left);
+            // Vector Target Icon
+            BeatFixLookAndFeel::drawTargetIcon(g, juce::Rectangle<float>(content.getX(), content.getY() + 21.0f, 14.0f, 14.0f), juce::Colour(0xFFFF334B));
 
             g.setColour(juce::Colours::white);
             g.setFont(juce::Font(16.0f, juce::Font::bold));
@@ -343,7 +344,10 @@ void MainComponent::paint(juce::Graphics& g) {
             // Card 4: Ratio
             g.setColour(juce::Colour(0xFF718096));
             g.setFont(juce::Font(11.0f, juce::Font::plain));
-            g.drawText("Ratio ⓘ", content.getX(), content.getY(), content.getWidth(), 14, juce::Justification::left);
+            g.drawText("Ratio", content.getX(), content.getY(), 34, 14, juce::Justification::left);
+
+            // Vector Info Icon (i)
+            BeatFixLookAndFeel::drawInfoIcon(g, juce::Rectangle<float>(content.getX() + 36.0f, content.getY() + 1.0f, 11.0f, 11.0f), juce::Colour(0xFF718096));
 
             g.setColour(juce::Colours::white);
             g.setFont(juce::Font(15.0f, juce::Font::bold));
@@ -367,9 +371,10 @@ void MainComponent::paint(juce::Graphics& g) {
             g.fillEllipse(static_cast<float>(content.getX() + 24), static_cast<float>(content.getY() + 25), 6.0f, 6.0f);
         } else if (i == 5) {
             // Card 6: Smoothing Label
+            BeatFixLookAndFeel::drawWaveformIcon(g, juce::Rectangle<float>(content.getX(), content.getY() + 2.0f, 12.0f, 9.0f), juce::Colour(0xFF718096));
             g.setColour(juce::Colour(0xFF718096));
             g.setFont(juce::Font(11.0f, juce::Font::plain));
-            g.drawText("📈 Smoothing", content.getX(), content.getY(), content.getWidth(), 14, juce::Justification::left);
+            g.drawText("Smoothing", content.getX() + 16, content.getY(), content.getWidth() - 16, 14, juce::Justification::left);
         }
     }
 
@@ -505,7 +510,7 @@ void MainComponent::update_ui_from_session() {
 
         double sr_khz = m_session.source_audio().sample_rate / 1000.0;
         juce::String chStr = (m_session.source_audio().channels == 2) ? "Stereo" : "Mono";
-        m_track_specs = juce::String::formatted("%s • %.1f kHz • %s", ext.c_str(), sr_khz, chStr.toRawUTF8());
+        m_track_specs = juce::String::formatted("%s | %.1f kHz | %s", ext.c_str(), sr_khz, chStr.toRawUTF8());
 
         m_target_bpm_slider.setValue(m_session.target_bpm(), juce::dontSendNotification);
         m_player.set_sources(m_session.source_audio_shared(), m_session.corrected_audio_shared(), &m_session.warp_map());

@@ -117,6 +117,36 @@ This document serves as the **authoritative progress tracking log** for BeatFix.
 
 ## 📝 Recent Change Log
 
+### [October 11, 2026] — UI Typography & Vector Icon System Overhaul
+* **Resolved Character Encoding / Mojibake Issues:**
+  * Replaced all raw multi-byte Unicode emoji and non-ASCII character literals in UI buttons and labels (`📁`, `💾`, `▶`, `❚❚`, `⏹`, `⤓`, `♫`, `◎`, `ⓘ`, `📈`) with pure ASCII strings and dedicated native vector icons.
+  * Eliminates platform-dependent code-page corruption (`ð□□□`, `â□¶`, `â¤□`) across Windows environments.
+* **Native Vector Icon System (`BeatFixLookAndFeel.h`):**
+  * Implemented antialiased vector drawing routines for:
+    * Folder icon (`Open`)
+    * Floppy disk icon (`Save`)
+    * Play triangle (`Play`)
+    * Dual vertical bars (`Pause`)
+    * Solid square (`Stop`)
+    * Upload tray with arrow and chevron (`Export`)
+    * Three vertical dots (`Menu`)
+    * Up and down steppers (`▲` / `▼`)
+    * Double musical note (Track card)
+    * Concentric target circle (Detected BPM card)
+    * Info badge (Ratio card)
+    * Sine/waveform curve (Smoothing card & Warped tag)
+    * Magnifying glass (Zoom controls)
+  * Dynamic icon and text layout using `juce::GlyphArrangement` string width measurement.
+* **Adaptive Beat Number Density:**
+  * Fixed overlapping number clustering (`1 2 3 4 1 2 3 4...`) when zoomed out over full songs.
+  * Added adaptive pixel-density calculation (`px_per_beat`):
+    * High zoom (`px_per_beat >= 24px`): displays all beat numbers `1`, `2`, `3`, `4`.
+    * Medium zoom (`px_per_beat >= 7px`): displays prominent downbeat markers and `1` numbers with clean spacing.
+    * Wide overview: displays clean beat tick lines and downbeats without visual text crowding.
+* **Build & Deployment:**
+  * Verified successful build with MSVC C++20 and Ninja.
+  * Updated executable in `bin/BeatFix.exe` and tested runtime stability.
+
 ### [October 11, 2026] — UI/UX & Waveform Zoom Redesign
 * **Dual-View Waveform Implementation:**
   * Created overview track lane with time ruler and mini warp heatmap strip.

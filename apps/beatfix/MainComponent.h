@@ -53,32 +53,32 @@ private:
 
     // Track metadata
     juce::String m_track_title{"No file loaded"};
-    juce::String m_track_specs{"Drag audio here • WAV, FLAC, MP3"};
+    juce::String m_track_specs{"Drag audio here | WAV, FLAC, MP3"};
 
     // Header Controls
-    juce::TextButton m_open_button{"📁 Open"};
-    juce::TextButton m_save_button{"💾 Save"};
-    juce::TextButton m_menu_button{"⁝"};
+    juce::TextButton m_open_button{"Open"};
+    juce::TextButton m_save_button{"Save"};
+    juce::TextButton m_menu_button{""};
 
     // Dashboard Cards Controls
     juce::TextButton m_card_track_btn; // Overlay button on track card to open file
     juce::Slider m_target_bpm_slider;
-    juce::TextButton m_bpm_up_btn{"▲"};
-    juce::TextButton m_bpm_down_btn{"▼"};
+    juce::TextButton m_bpm_up_btn{"up"};
+    juce::TextButton m_bpm_down_btn{"down"};
     juce::ComboBox m_mode_combo;
 
     // Waveform View
     WaveformView m_waveform_view;
 
     // Transport Bar Controls
-    juce::TextButton m_play_button{"▶ Play"};
-    juce::TextButton m_pause_button{"❚❚ Pause"};
-    juce::TextButton m_stop_button{"⏹ Stop"};
+    juce::TextButton m_play_button{"Play"};
+    juce::TextButton m_pause_button{"Pause"};
+    juce::TextButton m_stop_button{"Stop"};
     juce::Label m_time_display_label;
     juce::TextButton m_source_a_button{"A: Original"};
     juce::TextButton m_source_b_button{"B: Corrected"};
     juce::ToggleButton m_metronome_toggle{"Click (K)"};
-    juce::TextButton m_export_button{"⤓ Export ⌵"};
+    juce::TextButton m_export_button{"Export"};
     double m_render_fraction = 0.0;
     juce::ProgressBar m_render_progress{m_render_fraction};
 

@@ -70,7 +70,7 @@ private:
     double m_drag_initial_dur_sec = 30.0;
 
     // Detail lane zoom UI buttons
-    juce::TextButton m_zoom_out_btn{"−"};
+    juce::TextButton m_zoom_out_btn{"-"};
     juce::TextButton m_zoom_reset_btn{"100%"};
     juce::TextButton m_zoom_in_btn{"+"};
 };
