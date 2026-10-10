@@ -5,8 +5,10 @@
 #include "AudioPlayer.h"
 #include "WaveformView.h"
 #include "ExportModal.h"
+#include "BeatFixLookAndFeel.h"
 #include "../../src/bf_engine/session.h"
 #include <memory>
+#include <atomic>
 
 namespace bf::gui {
 
@@ -41,45 +43,44 @@ private:
     void update_ui_from_session();
     void trigger_render();
 
+    BeatFixLookAndFeel m_look_and_feel;
+
     bool m_is_drag_hovering = false;
     std::atomic<uint64_t> m_render_generation{0};
 
     engine::Session m_session;
     AudioPlayer m_player;
 
+    // Track metadata
+    juce::String m_track_title{"No file loaded"};
+    juce::String m_track_specs{"Drag audio here • WAV, FLAC, MP3"};
+
     // Header Controls
-    juce::TextButton m_open_button{"Open Audio..."};
-    juce::TextButton m_save_button{"Save Project"};
-    juce::Label m_file_info_label;
-    juce::TextButton m_undo_button{"↶ Undo"};
-    juce::TextButton m_redo_button{"↷ Redo"};
+    juce::TextButton m_open_button{"📁 Open"};
+    juce::TextButton m_save_button{"💾 Save"};
+    juce::TextButton m_menu_button{"⁝"};
 
-    // Control Strip
-    juce::Label m_detected_label;
-    juce::Label m_confidence_badge;
-    juce::Label m_target_label;
+    // Dashboard Cards Controls
+    juce::TextButton m_card_track_btn; // Overlay button on track card to open file
     juce::Slider m_target_bpm_slider;
-    juce::TextButton m_reset_bpm_button{"↺"};
-    juce::Label m_detent_label;
-    juce::Slider m_detent_slider;
+    juce::TextButton m_bpm_up_btn{"▲"};
+    juce::TextButton m_bpm_down_btn{"▼"};
     juce::ComboBox m_mode_combo;
-    juce::Label m_diag_label;
 
-    // Central Waveform
+    // Waveform View
     WaveformView m_waveform_view;
 
-    // Transport Bar
-    juce::TextButton m_play_pause_button{"▶ Play"};
+    // Transport Bar Controls
+    juce::TextButton m_play_button{"▶ Play"};
+    juce::TextButton m_pause_button{"❚❚ Pause"};
     juce::TextButton m_stop_button{"⏹ Stop"};
-    juce::TextButton m_seek_start_button{"⏮"};
-    juce::TextButton m_seek_end_button{"⏭"};
+    juce::Label m_time_display_label;
     juce::TextButton m_source_a_button{"A: Original"};
     juce::TextButton m_source_b_button{"B: Corrected"};
     juce::ToggleButton m_metronome_toggle{"Click (K)"};
-    juce::Label m_time_display_label;
+    juce::TextButton m_export_button{"⤓ Export ⌵"};
     double m_render_fraction = 0.0;
     juce::ProgressBar m_render_progress{m_render_fraction};
-    juce::TextButton m_export_button{"Export..."};
 
     // Modal Export Component
     std::unique_ptr<ExportModal> m_export_modal;

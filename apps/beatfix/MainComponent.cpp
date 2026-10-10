@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "../../src/bf_io/path_utf8.h"
+#include "../../src/bf_dsp/stretch.h"
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
@@ -8,6 +9,7 @@
 namespace bf::gui {
 
 MainComponent::MainComponent() {
+    setLookAndFeel(&m_look_and_feel);
     m_player.init();
     setWantsKeyboardFocus(true);
 
@@ -18,43 +20,18 @@ MainComponent::MainComponent() {
     m_save_button.onClick = [this] { save_project_dialog(); };
     addAndMakeVisible(m_save_button);
 
-    m_file_info_label.setText("No file loaded", juce::dontSendNotification);
-    m_file_info_label.setColour(juce::Label::textColourId, juce::Colour(0xFFA0AEC0));
-    addAndMakeVisible(m_file_info_label);
+    m_menu_button.onClick = [this] { open_file_dialog(); };
+    addAndMakeVisible(m_menu_button);
 
-    m_undo_button.onClick = [this] {
-        if (m_session.can_undo()) {
-            m_session.undo();
-            update_ui_from_session();
-            trigger_render();
-        }
-    };
-    addAndMakeVisible(m_undo_button);
-
-    m_redo_button.onClick = [this] {
-        if (m_session.can_redo()) {
-            m_session.redo();
-            update_ui_from_session();
-            trigger_render();
-        }
-    };
-    addAndMakeVisible(m_redo_button);
-
-    // --- Control Strip ---
-    m_detected_label.setText("DETECTED: --- BPM", juce::dontSendNotification);
-    m_detected_label.setFont(juce::Font(14.0f, juce::Font::bold));
-    addAndMakeVisible(m_detected_label);
-
-    m_confidence_badge.setText("---", juce::dontSendNotification);
-    m_confidence_badge.setColour(juce::Label::textColourId, juce::Colour(0xFF68D391));
-    addAndMakeVisible(m_confidence_badge);
-
-    m_target_label.setText("TARGET:", juce::dontSendNotification);
-    addAndMakeVisible(m_target_label);
+    // --- Dashboard Cards Controls ---
+    m_card_track_btn.onClick = [this] { open_file_dialog(); };
+    m_card_track_btn.setAlpha(0.0f); // Invisible click overlay on card 1
+    addAndMakeVisible(m_card_track_btn);
 
     m_target_bpm_slider.setRange(40.0, 300.0, 0.1);
     m_target_bpm_slider.setValue(120.0);
     m_target_bpm_slider.setSliderStyle(juce::Slider::LinearBar);
+    m_target_bpm_slider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 60, 20);
     m_target_bpm_slider.onValueChange = [this] {
         if (m_session.is_analyzed() && std::abs(m_session.target_bpm() - m_target_bpm_slider.getValue()) > 0.05) {
             m_session.set_target_bpm(m_target_bpm_slider.getValue());
@@ -64,128 +41,83 @@ MainComponent::MainComponent() {
     };
     addAndMakeVisible(m_target_bpm_slider);
 
-    m_reset_bpm_button.onClick = [this] {
-        if (m_session.is_analyzed()) {
-            double orig = std::round(m_session.analysis().bpm_global);
-            m_target_bpm_slider.setValue(orig);
-        }
+    m_bpm_up_btn.onClick = [this] {
+        m_target_bpm_slider.setValue(m_target_bpm_slider.getValue() + 1.0);
     };
-    addAndMakeVisible(m_reset_bpm_button);
+    addAndMakeVisible(m_bpm_up_btn);
 
-    m_detent_label.setText("CORRECTION: 2 bars (Natural)", juce::dontSendNotification);
-    addAndMakeVisible(m_detent_label);
-
-    m_detent_slider.setRange(0, 5, 1);
-    m_detent_slider.setValue(2); // 2 = Natural8 (default)
-    m_detent_slider.setSliderStyle(juce::Slider::LinearHorizontal);
-    m_detent_slider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
-    m_detent_slider.onValueChange = [this] {
-        int v = static_cast<int>(m_detent_slider.getValue());
-        dsp::WarpDetent det = dsp::WarpDetent::Natural8;
-        juce::String name = "2 bars (Natural)";
-        if (v == 0) { det = dsp::WarpDetent::Strict; name = "Strict (0 bars)"; }
-        else if (v == 1) { det = dsp::WarpDetent::Detent4; name = "1 bar"; }
-        else if (v == 2) { det = dsp::WarpDetent::Natural8; name = "2 bars (Natural)"; }
-        else if (v == 3) { det = dsp::WarpDetent::Detent16; name = "4 bars"; }
-        else if (v == 4) { det = dsp::WarpDetent::Detent32; name = "8 bars"; }
-        else if (v == 5) { det = dsp::WarpDetent::Global; name = "Global (Constant Ratio)"; }
-
-        m_detent_label.setText("CORRECTION: " + name, juce::dontSendNotification);
-        if (m_session.is_analyzed()) {
-            m_session.set_detent(det);
-            m_waveform_view.repaint();
-            trigger_render();
-        }
+    m_bpm_down_btn.onClick = [this] {
+        m_target_bpm_slider.setValue(m_target_bpm_slider.getValue() - 1.0);
     };
-    addAndMakeVisible(m_detent_slider);
+    addAndMakeVisible(m_bpm_down_btn);
 
     m_mode_combo.addItem("Smooth (Signalsmith)", 1);
-    m_mode_combo.addItem("Resample (Catmull-Rom)", 2);
-    m_mode_combo.setSelectedId(1);
+    m_mode_combo.addItem("Resample (Varispeed)", 2);
+    m_mode_combo.setSelectedId(1, juce::dontSendNotification);
     m_mode_combo.onChange = [this] {
-        dsp::StretchEngineMode m = (m_mode_combo.getSelectedId() == 2) ? dsp::StretchEngineMode::Resample : dsp::StretchEngineMode::Smooth;
         if (m_session.is_analyzed()) {
-            m_session.set_mode(m);
+            bf::dsp::StretchEngineMode sm = (m_mode_combo.getSelectedId() == 2) ?
+                                  bf::dsp::StretchEngineMode::Resample : bf::dsp::StretchEngineMode::Smooth;
+            m_session.set_mode(sm);
             trigger_render();
         }
     };
     addAndMakeVisible(m_mode_combo);
 
-    m_diag_label.setText("Ratio: [1.00..1.00] | Warnings: 0", juce::dontSendNotification);
-    m_diag_label.setColour(juce::Label::textColourId, juce::Colour(0xFFA0AEC0));
-    addAndMakeVisible(m_diag_label);
-
     // --- Waveform View ---
-    m_waveform_view.set_session(&m_session);
-    m_waveform_view.on_seek = [this](double s) {
-        m_player.seek_seconds(s);
-        m_waveform_view.set_playhead_seconds(s);
-    };
     addAndMakeVisible(m_waveform_view);
+    m_waveform_view.on_seek = [this](double seek_sec) {
+        m_player.seek_seconds(seek_sec);
+    };
 
     // --- Transport Bar ---
-    m_play_pause_button.onClick = [this] {
-        if (m_player.is_playing()) {
-            m_player.pause();
-            m_play_pause_button.setButtonText("▶ Play");
-        } else {
-            m_player.play();
-            m_play_pause_button.setButtonText("⏸ Pause");
-        }
-    };
-    addAndMakeVisible(m_play_pause_button);
+    m_play_button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF161B26));
+    m_play_button.onClick = [this] { m_player.play(); };
+    addAndMakeVisible(m_play_button);
 
-    m_stop_button.onClick = [this] {
-        m_player.stop();
-        m_play_pause_button.setButtonText("▶ Play");
-        m_waveform_view.set_playhead_seconds(0.0);
-    };
+    m_pause_button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF161B26));
+    m_pause_button.onClick = [this] { m_player.pause(); };
+    addAndMakeVisible(m_pause_button);
+
+    m_stop_button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF161B26));
+    m_stop_button.onClick = [this] { m_player.stop(); };
     addAndMakeVisible(m_stop_button);
 
-    m_seek_start_button.onClick = [this] {
-        m_player.seek_seconds(0.0);
-        m_waveform_view.set_playhead_seconds(0.0);
-    };
-    addAndMakeVisible(m_seek_start_button);
+    m_time_display_label.setText("00:00.000 / 00:00.000", juce::dontSendNotification);
+    m_time_display_label.setFont(juce::Font(15.0f, juce::Font::bold));
+    m_time_display_label.setColour(juce::Label::textColourId, juce::Colours::white);
+    addAndMakeVisible(m_time_display_label);
 
-    m_seek_end_button.onClick = [this] {
-        if (m_session.source_audio().total_frames > 0) {
-            double end_sec = static_cast<double>(m_session.source_audio().total_frames) / m_session.source_audio().sample_rate;
-            m_player.seek_seconds(end_sec);
-            m_waveform_view.set_playhead_seconds(end_sec);
-        }
-    };
-    addAndMakeVisible(m_seek_end_button);
-
-    // A/B Segmented Controls
-    m_source_a_button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF2D3748));
     m_source_a_button.onClick = [this] {
         m_player.set_active_source(PlaybackSource::SourceA_Original);
-        m_source_a_button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF3182CE));
-        m_source_b_button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF2D3748));
+        m_source_a_button.getProperties().set("accentRed", true);
+        m_source_b_button.getProperties().remove("accentRed");
+        m_waveform_view.set_active_source(false);
+        m_source_a_button.repaint();
+        m_source_b_button.repaint();
     };
     addAndMakeVisible(m_source_a_button);
 
-    m_source_b_button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF3182CE));
     m_source_b_button.onClick = [this] {
         m_player.set_active_source(PlaybackSource::SourceB_Corrected);
-        m_source_b_button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF3182CE));
-        m_source_a_button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF2D3748));
+        m_source_b_button.getProperties().set("accentRed", true);
+        m_source_a_button.getProperties().remove("accentRed");
+        m_waveform_view.set_active_source(true);
+        m_source_a_button.repaint();
+        m_source_b_button.repaint();
     };
+    // Default to B: Corrected as accented
+    m_source_b_button.getProperties().set("accentRed", true);
     addAndMakeVisible(m_source_b_button);
 
     m_metronome_toggle.onStateChange = [this] {
         m_player.set_metronome_enabled(m_metronome_toggle.getToggleState());
     };
+    m_metronome_toggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xFFE2E8F0));
     addAndMakeVisible(m_metronome_toggle);
-
-    m_time_display_label.setText("00:00.000", juce::dontSendNotification);
-    m_time_display_label.setFont(juce::Font(16.0f, juce::Font::bold));
-    addAndMakeVisible(m_time_display_label);
 
     addAndMakeVisible(m_render_progress);
 
-    m_export_button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF38A169)); // Green
     m_export_button.onClick = [this] {
         if (!m_export_modal) {
             m_export_modal = std::make_unique<ExportModal>(&m_session, [this] {
@@ -199,39 +131,49 @@ MainComponent::MainComponent() {
     addAndMakeVisible(m_export_button);
 
     setSize(1280, 800);
-    startTimerHz(30); // 30 Hz UI timer for time display and progress
+    startTimerHz(30); // 30 Hz UI refresh timer
 }
 
 MainComponent::~MainComponent() {
     stopTimer();
     m_player.shutdown();
+    setLookAndFeel(nullptr);
 }
 
 void MainComponent::timerCallback() {
     double pos = m_player.get_position_seconds();
     m_waveform_view.set_playhead_seconds(pos);
 
+    // Time display: current / total
     int mins = static_cast<int>(pos) / 60;
     double secs = std::fmod(pos, 60.0);
+
+    double total_dur = 0.0;
+    if (!m_session.source_audio().is_empty() && m_session.source_audio().sample_rate > 0) {
+        total_dur = static_cast<double>(m_session.source_audio().total_frames) / m_session.source_audio().sample_rate;
+    }
+    int t_mins = static_cast<int>(total_dur) / 60;
+    double t_secs = std::fmod(total_dur, 60.0);
+
     std::ostringstream ss;
     ss << std::setfill('0') << std::setw(2) << mins << ":"
-       << std::setfill('0') << std::setw(6) << std::fixed << std::setprecision(3) << secs;
+       << std::setfill('0') << std::setw(6) << std::fixed << std::setprecision(3) << secs
+       << "  /  "
+       << std::setfill('0') << std::setw(2) << t_mins << ":"
+       << std::setfill('0') << std::setw(6) << std::fixed << std::setprecision(3) << t_secs;
     m_time_display_label.setText(ss.str(), juce::dontSendNotification);
-
-    m_undo_button.setEnabled(m_session.can_undo());
-    m_redo_button.setEnabled(m_session.can_redo());
 }
 
 bool MainComponent::keyPressed(const juce::KeyPress& key) {
     if (key == juce::KeyPress::spaceKey) {
-        m_play_pause_button.triggerClick();
+        if (m_player.is_playing()) m_player.pause();
+        else m_player.play();
         return true;
-    } else if (key.getTextCharacter() == 't' || key.getTextCharacter() == 'T') {
-        if (m_player.get_active_source() == PlaybackSource::SourceA_Original) {
-            m_source_b_button.triggerClick();
-        } else {
-            m_source_a_button.triggerClick();
-        }
+    } else if (key.getTextCharacter() == 'a' || key.getTextCharacter() == 'A') {
+        m_source_a_button.triggerClick();
+        return true;
+    } else if (key.getTextCharacter() == 'b' || key.getTextCharacter() == 'B') {
+        m_source_b_button.triggerClick();
         return true;
     } else if (key.getTextCharacter() == 'k' || key.getTextCharacter() == 'K') {
         m_metronome_toggle.setToggleState(!m_metronome_toggle.getToggleState(), juce::sendNotification);
@@ -243,87 +185,217 @@ bool MainComponent::keyPressed(const juce::KeyPress& key) {
 void MainComponent::resized() {
     auto area = getLocalBounds();
 
-    // 1. Header (40 px)
-    auto header = area.removeFromTop(40).reduced(8, 4);
-    m_open_button.setBounds(header.removeFromLeft(110));
-    header.removeFromLeft(8);
-    m_save_button.setBounds(header.removeFromLeft(100));
-    header.removeFromLeft(16);
-    m_undo_button.setBounds(header.removeFromRight(70));
+    // 1. Top Header Bar (44 px)
+    auto header = area.removeFromTop(44).reduced(16, 6);
+    header.removeFromLeft(160); // Space for Brand logo
+    m_menu_button.setBounds(header.removeFromRight(28));
     header.removeFromRight(8);
-    m_redo_button.setBounds(header.removeFromRight(70));
-    header.removeFromRight(16);
-    m_file_info_label.setBounds(header);
+    m_save_button.setBounds(header.removeFromRight(84));
+    header.removeFromRight(8);
+    m_open_button.setBounds(header.removeFromRight(84));
 
-    // 2. Control Strip (64 px)
-    auto ctrl = area.removeFromTop(64).reduced(8, 6);
-    auto ctrl_top = ctrl.removeFromTop(26);
-    m_detected_label.setBounds(ctrl_top.removeFromLeft(180));
-    m_confidence_badge.setBounds(ctrl_top.removeFromLeft(100));
-    ctrl_top.removeFromLeft(24);
-    m_target_label.setBounds(ctrl_top.removeFromLeft(64));
-    m_target_bpm_slider.setBounds(ctrl_top.removeFromLeft(100));
-    ctrl_top.removeFromLeft(4);
-    m_reset_bpm_button.setBounds(ctrl_top.removeFromLeft(28));
-    ctrl_top.removeFromLeft(24);
-    m_diag_label.setBounds(ctrl_top);
+    // 2. Dashboard Cards Strip (72 px)
+    auto cards_strip = area.removeFromTop(72).reduced(14, 4);
+    int total_w = cards_strip.getWidth();
+    int card_gap = 8;
+    int num_cards = 6;
+    int card_w = (total_w - (num_cards - 1) * card_gap) / num_cards;
 
-    auto ctrl_bot = ctrl;
-    m_detent_label.setBounds(ctrl_bot.removeFromLeft(200));
-    m_detent_slider.setBounds(ctrl_bot.removeFromLeft(160));
-    ctrl_bot.removeFromLeft(24);
-    m_mode_combo.setBounds(ctrl_bot.removeFromLeft(180));
+    // Card 1: Track info
+    auto c1 = cards_strip.removeFromLeft(card_w);
+    m_card_track_btn.setBounds(c1);
+    cards_strip.removeFromLeft(card_gap);
 
-    // 3. Transport Bar (50 px at bottom)
-    auto transport = area.removeFromBottom(50).reduced(8, 6);
-    m_seek_start_button.setBounds(transport.removeFromLeft(36));
-    transport.removeFromLeft(4);
-    m_play_pause_button.setBounds(transport.removeFromLeft(84));
-    transport.removeFromLeft(4);
-    m_stop_button.setBounds(transport.removeFromLeft(74));
-    transport.removeFromLeft(4);
-    m_seek_end_button.setBounds(transport.removeFromLeft(36));
-    transport.removeFromLeft(20);
-    m_time_display_label.setBounds(transport.removeFromLeft(110));
-    transport.removeFromLeft(20);
-    m_source_a_button.setBounds(transport.removeFromLeft(100));
-    transport.removeFromLeft(4);
-    m_source_b_button.setBounds(transport.removeFromLeft(110));
+    // Card 2: Detected BPM
+    auto c2 = cards_strip.removeFromLeft(card_w);
+    cards_strip.removeFromLeft(card_gap);
+
+    // Card 3: Target BPM
+    auto c3 = cards_strip.removeFromLeft(card_w);
+    auto c3_ctrl = c3.reduced(10, 8);
+    c3_ctrl.removeFromTop(20); // Label height
+    m_bpm_down_btn.setBounds(c3_ctrl.removeFromLeft(20).withHeight(24));
+    m_bpm_up_btn.setBounds(c3_ctrl.removeFromRight(20).withHeight(24));
+    m_target_bpm_slider.setBounds(c3_ctrl.withHeight(24));
+    cards_strip.removeFromLeft(card_gap);
+
+    // Card 4: Ratio
+    auto c4 = cards_strip.removeFromLeft(card_w);
+    cards_strip.removeFromLeft(card_gap);
+
+    // Card 5: Warnings
+    auto c5 = cards_strip.removeFromLeft(card_w);
+    cards_strip.removeFromLeft(card_gap);
+
+    // Card 6: Smoothing
+    auto c6 = cards_strip;
+    auto c6_ctrl = c6.reduced(10, 8);
+    c6_ctrl.removeFromTop(20);
+    m_mode_combo.setBounds(c6_ctrl.withHeight(24));
+
+    // 3. Bottom Transport Bar (56 px)
+    auto transport = area.removeFromBottom(56).reduced(14, 8);
+    m_play_button.setBounds(transport.removeFromLeft(70));
+    transport.removeFromLeft(6);
+    m_pause_button.setBounds(transport.removeFromLeft(76));
+    transport.removeFromLeft(6);
+    m_stop_button.setBounds(transport.removeFromLeft(70));
     transport.removeFromLeft(16);
-    m_metronome_toggle.setBounds(transport.removeFromLeft(90));
-    transport.removeFromLeft(20);
-    m_export_button.setBounds(transport.removeFromRight(90));
-    transport.removeFromRight(16);
-    m_render_progress.setBounds(transport.removeFromRight(150));
 
-    // 4. Waveform View (Remaining central area)
-    m_waveform_view.setBounds(area);
+    m_time_display_label.setBounds(transport.removeFromLeft(220));
+    transport.removeFromLeft(16);
+
+    m_source_a_button.setBounds(transport.removeFromLeft(96));
+    transport.removeFromLeft(4);
+    m_source_b_button.setBounds(transport.removeFromLeft(104));
+    transport.removeFromLeft(16);
+
+    m_metronome_toggle.setBounds(transport.removeFromLeft(86));
+    transport.removeFromLeft(16);
+
+    m_render_progress.setBounds(transport.removeFromRight(130));
+    transport.removeFromRight(12);
+    m_export_button.setBounds(transport.removeFromRight(96));
+
+    // 4. Waveform Area (remaining space)
+    area.removeFromTop(6);
+    area.removeFromBottom(6);
+    m_waveform_view.setBounds(area.reduced(14, 0));
 
     if (m_export_modal) {
-        m_export_modal->setCentrePosition(getWidth() / 2, getHeight() / 2);
+        m_export_modal->setBounds(getLocalBounds());
     }
 }
 
 void MainComponent::paint(juce::Graphics& g) {
-    g.fillAll(juce::Colour(0xFF1A1D24)); // Main UI Background
+    g.fillAll(juce::Colour(0xFF0B0E14)); // Deep matte obsidian background
 
-    // Draw rich drag hover overlay if user drags an audio file into window
+    // --- Brand Logo (Top-Left) ---
+    float lx = 16.0f, ly = 13.0f, lw = 16.0f, lh = 16.0f;
+    g.setColour(juce::Colour(0xFFFF334B));
+    juce::Path p1, p2;
+    p1.addLineSegment(juce::Line<float>(lx, ly, lx + lw, ly + lh), 3.5f);
+    p2.addLineSegment(juce::Line<float>(lx, ly + lh, lx + lw, ly), 3.5f);
+    g.strokePath(p1, juce::PathStrokeType(3.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.strokePath(p2, juce::PathStrokeType(3.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    g.setColour(juce::Colours::white);
+    g.setFont(juce::Font(18.0f, juce::Font::bold));
+    g.drawText("BeatFix", lx + lw + 8, 10, 100, 24, juce::Justification::left);
+
+    // --- Dashboard Cards Rendering ---
+    auto cards_area = juce::Rectangle<int>(14, 48, getWidth() - 28, 64);
+    int total_w = cards_area.getWidth();
+    int card_gap = 8;
+    int num_cards = 6;
+    int card_w = (total_w - (num_cards - 1) * card_gap) / num_cards;
+
+    for (int i = 0; i < num_cards; ++i) {
+        auto card_rect = juce::Rectangle<int>(cards_area.getX() + i * (card_w + card_gap), cards_area.getY(), card_w, cards_area.getHeight());
+        g.setColour(juce::Colour(0xFF121620));
+        g.fillRoundedRectangle(card_rect.toFloat(), 8.0f);
+        g.setColour(juce::Colour(0xFF1F2633));
+        g.drawRoundedRectangle(card_rect.toFloat(), 8.0f, 1.0f);
+
+        auto content = card_rect.reduced(10, 8);
+
+        if (i == 0) {
+            // Card 1: Track Details
+            g.setColour(juce::Colour(0xFF1A2230));
+            g.fillEllipse(static_cast<float>(content.getX()), static_cast<float>(content.getY() + 4), 28.0f, 28.0f);
+            g.setColour(juce::Colour(0xFFFF334B));
+            g.setFont(juce::Font(14.0f, juce::Font::bold));
+            g.drawText("♫", content.getX(), content.getY() + 4, 28, 28, juce::Justification::centred);
+
+            g.setColour(juce::Colours::white);
+            g.setFont(juce::Font(12.5f, juce::Font::bold));
+            g.drawText(m_track_title, content.getX() + 34, content.getY() + 2, content.getWidth() - 44, 16, juce::Justification::left, true);
+
+            g.setColour(juce::Colour(0xFF718096));
+            g.setFont(juce::Font(10.5f, juce::Font::plain));
+            g.drawText(m_track_specs, content.getX() + 34, content.getY() + 20, content.getWidth() - 44, 14, juce::Justification::left, true);
+
+            g.drawText("⌵", content.getRight() - 10, content.getY() + 10, 10, 14, juce::Justification::right);
+        } else if (i == 1) {
+            // Card 2: Detected BPM
+            g.setColour(juce::Colour(0xFF718096));
+            g.setFont(juce::Font(11.0f, juce::Font::plain));
+            g.drawText("Detected BPM", content.getX(), content.getY(), content.getWidth(), 14, juce::Justification::left);
+
+            g.setColour(juce::Colour(0xFFFF334B));
+            g.drawText("◎", content.getX(), content.getY() + 18, 16, 20, juce::Justification::left);
+
+            g.setColour(juce::Colours::white);
+            g.setFont(juce::Font(16.0f, juce::Font::bold));
+            juce::String bpmStr = m_session.is_analyzed() ?
+                                  juce::String::formatted("%.2f", m_session.analysis().bpm_global) : "---";
+            g.drawText(bpmStr, content.getX() + 20, content.getY() + 18, 60, 20, juce::Justification::left);
+
+            g.setColour(juce::Colour(0xFF718096));
+            g.setFont(juce::Font(11.0f, juce::Font::plain));
+            g.drawText("BPM", content.getX() + 82, content.getY() + 20, 30, 16, juce::Justification::left);
+        } else if (i == 2) {
+            // Card 3: Target BPM Label
+            g.setColour(juce::Colour(0xFF718096));
+            g.setFont(juce::Font(11.0f, juce::Font::plain));
+            g.drawText("Target BPM", content.getX(), content.getY(), content.getWidth(), 14, juce::Justification::left);
+        } else if (i == 3) {
+            // Card 4: Ratio
+            g.setColour(juce::Colour(0xFF718096));
+            g.setFont(juce::Font(11.0f, juce::Font::plain));
+            g.drawText("Ratio ⓘ", content.getX(), content.getY(), content.getWidth(), 14, juce::Justification::left);
+
+            g.setColour(juce::Colours::white);
+            g.setFont(juce::Font(15.0f, juce::Font::bold));
+            juce::String ratioStr = m_session.is_analyzed() ?
+                                    juce::String::formatted("%.2f..%.2f", m_session.warp_map().diagnostics().min_ratio, m_session.warp_map().diagnostics().max_ratio) : "1.00..1.00";
+            g.drawText(ratioStr, content.getX(), content.getY() + 18, content.getWidth(), 20, juce::Justification::left);
+        } else if (i == 4) {
+            // Card 5: Warnings
+            g.setColour(juce::Colour(0xFF718096));
+            g.setFont(juce::Font(11.0f, juce::Font::plain));
+            g.drawText("Warnings", content.getX(), content.getY(), content.getWidth(), 14, juce::Justification::left);
+
+            g.setColour(juce::Colours::white);
+            g.setFont(juce::Font(15.0f, juce::Font::bold));
+            int warnCount = m_session.is_analyzed() ? static_cast<int>(m_session.warp_map().diagnostics().num_extreme_segments) : 0;
+            g.drawText(juce::String(warnCount), content.getX(), content.getY() + 18, 20, 20, juce::Justification::left);
+
+            // Green/Red status dot
+            juce::Colour dotCol = (warnCount == 0) ? juce::Colour(0xFF2ECC71) : juce::Colour(0xFFFF334B);
+            g.setColour(dotCol);
+            g.fillEllipse(static_cast<float>(content.getX() + 24), static_cast<float>(content.getY() + 25), 6.0f, 6.0f);
+        } else if (i == 5) {
+            // Card 6: Smoothing Label
+            g.setColour(juce::Colour(0xFF718096));
+            g.setFont(juce::Font(11.0f, juce::Font::plain));
+            g.drawText("📈 Smoothing", content.getX(), content.getY(), content.getWidth(), 14, juce::Justification::left);
+        }
+    }
+
+    // --- Bottom Transport Container Bar ---
+    auto transport_rect = juce::Rectangle<int>(0, getHeight() - 56, getWidth(), 56);
+    g.setColour(juce::Colour(0xFF121620));
+    g.fillRect(transport_rect);
+    g.setColour(juce::Colour(0xFF1F2633));
+    g.drawHorizontalLine(transport_rect.getY(), 0.0f, static_cast<float>(getWidth()));
+
+    // --- Drag Hover Overlay ---
     if (m_is_drag_hovering) {
-        auto bounds = getLocalBounds().toFloat();
-        g.setColour(juce::Colour(0xE60F172A)); // Dark backdrop with high opacity
-        g.fillRect(bounds);
+        g.setColour(juce::Colour(0xD00B0E14));
+        g.fillAll();
 
-        auto inner = bounds.reduced(24.0f);
-        g.setColour(juce::Colour(0xFF38BDF8)); // Radiant sky blue
-        g.drawRoundedRectangle(inner, 16.0f, 3.0f);
+        auto inner = getLocalBounds().reduced(32);
+        g.setColour(juce::Colour(0xFFFF334B));
+        g.drawRoundedRectangle(inner.toFloat(), 12.0f, 2.0f);
 
-        auto top_half = inner.removeFromTop(inner.getHeight() * 0.55f);
+        auto top_half = inner.removeFromTop(inner.getHeight() / 2);
         g.setColour(juce::Colours::white);
         g.setFont(juce::Font(24.0f, juce::Font::bold));
         g.drawText("Drop Audio File to Analyze & Fix Timing",
                    top_half, juce::Justification::centredBottom, true);
 
-        g.setColour(juce::Colour(0xFF94A3B8));
+        g.setColour(juce::Colour(0xFF8A99AD));
         g.setFont(juce::Font(15.0f, juce::Font::plain));
         g.drawText("Supported formats: WAV, FLAC, MP3, AIFF, or .beatfix projects",
                    inner, juce::Justification::centredTop, true);
@@ -363,7 +435,6 @@ void MainComponent::filesDropped(const juce::StringArray& files, int /*x*/, int 
 
 void MainComponent::load_audio_file(const std::string& path) {
     m_player.stop();
-    m_play_pause_button.setButtonText("▶ Play");
 
     std::string ext = bf::io::get_extension_lower(path);
 
@@ -407,10 +478,14 @@ void MainComponent::open_file_dialog() {
 }
 
 void MainComponent::save_project_dialog() {
-    if (m_session.source_audio().is_empty()) return;
-    juce::FileChooser chooser("Save Project", {}, "*.beatfix");
+    if (!m_session.is_analyzed()) {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::AlertWindow::InfoIcon, "Save Project", "No analyzed project to save.");
+        return;
+    }
+    juce::FileChooser chooser("Save BeatFix Project", {}, "*.beatfix");
     if (chooser.browseForFileToSave(true)) {
-        auto file = chooser.getResult();
+        auto file = chooser.getResult().withFileExtension(".beatfix");
         auto save_res = m_session.save_project(file.getFullPathName().toStdString());
         if (!save_res.is_ok()) {
             juce::AlertWindow::showMessageBoxAsync(
@@ -420,53 +495,45 @@ void MainComponent::save_project_dialog() {
 }
 
 void MainComponent::update_ui_from_session() {
-    if (m_session.source_audio().is_empty()) return;
+    if (m_session.source_audio().sample_rate > 0) {
+        auto p = bf::io::path_from_utf8(m_session.source_audio().source_path);
+        m_track_title = bf::io::wide_to_utf8(p.stem().wstring());
 
-    std::filesystem::path p(m_session.source_audio().source_path);
-    std::ostringstream ss;
-    ss << p.filename().string() << " | "
-       << (m_session.source_audio().channels == 2 ? "Stereo" : "Mono") << " | "
-       << static_cast<int>(m_session.source_audio().sample_rate) << " Hz";
-    m_file_info_label.setText(juce::String::fromUTF8(ss.str().c_str()), juce::dontSendNotification);
+        std::string ext = bf::io::get_extension_lower(m_session.source_audio().source_path);
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::toupper);
+        if (ext.rfind(".", 0) == 0) ext = ext.substr(1);
 
-    if (m_session.is_analyzed()) {
-        std::ostringstream bss;
-        bss << "DETECTED: " << std::fixed << std::setprecision(2) << m_session.analysis().bpm_global << " BPM";
-        m_detected_label.setText(bss.str(), juce::dontSendNotification);
+        double sr_khz = m_session.source_audio().sample_rate / 1000.0;
+        juce::String chStr = (m_session.source_audio().channels == 2) ? "Stereo" : "Mono";
+        m_track_specs = juce::String::formatted("%s • %.1f kHz • %s", ext.c_str(), sr_khz, chStr.toRawUTF8());
 
-        std::string conf_str = "●●●○ High";
-        if (m_session.analysis().global_confidence == analysis::GlobalConfidence::Medium) conf_str = "●●○○ Med";
-        if (m_session.analysis().global_confidence == analysis::GlobalConfidence::Low) conf_str = "●○○○ Low";
-        m_confidence_badge.setText(conf_str, juce::dontSendNotification);
-
-        const auto& diag = m_session.warp_map().diagnostics();
-        std::ostringstream dss;
-        dss << "Ratio: [" << std::fixed << std::setprecision(2) << diag.min_ratio
-            << ".." << diag.max_ratio << "] | Warn: " << diag.num_warn_segments;
-        m_diag_label.setText(dss.str(), juce::dontSendNotification);
+        m_target_bpm_slider.setValue(m_session.target_bpm(), juce::dontSendNotification);
+        m_player.set_sources(m_session.source_audio_shared(), m_session.corrected_audio_shared(), &m_session.warp_map());
     }
-
-    m_player.set_sources(m_session.source_audio_shared(), m_session.corrected_audio_shared(), &m_session.warp_map());
+    repaint();
 }
 
 void MainComponent::trigger_render() {
-    m_render_fraction = 0.0;
-    const uint64_t gen = ++m_render_generation;
+    uint64_t gen = ++m_render_generation;
+    m_render_fraction = 0.05;
 
-    // Launch background thread to render full corrected audio without stalling UI
     std::thread([this, gen] {
         m_session.render_corrected([this, gen](const engine::RenderProgress& prog) {
             if (gen == m_render_generation.load()) {
                 m_render_fraction = prog.progress_fraction;
             }
         });
-        juce::MessageManager::callAsync([this, gen] {
-            if (gen == m_render_generation.load()) {
-                m_render_fraction = 1.0;
-                m_player.set_sources(m_session.source_audio_shared(), m_session.corrected_audio_shared(), &m_session.warp_map());
-                m_waveform_view.repaint();
-            }
-        });
+
+        if (gen == m_render_generation.load()) {
+            juce::MessageManager::callAsync([this, gen] {
+                if (gen == m_render_generation.load()) {
+                    m_render_fraction = 1.0;
+                    m_player.set_sources(m_session.source_audio_shared(), m_session.corrected_audio_shared(), &m_session.warp_map());
+                    m_waveform_view.repaint();
+                    repaint();
+                }
+            });
+        }
     }).detach();
 }
 
