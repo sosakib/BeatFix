@@ -119,10 +119,16 @@ void WaveformView::paint(juce::Graphics& g) {
     g.fillAll(juce::Colour(0xFF14171E)); // Dark background
 
     if (!m_session || m_session->source_audio().is_empty()) {
-        g.setColour(juce::Colours::grey);
-        g.setFont(18.0f);
-        g.drawText("Drop audio here or click [Open Audio...] to begin analysis",
-                   getLocalBounds(), juce::Justification::centred, true);
+        g.setColour(juce::Colour(0xFF2D3748));
+        g.drawRoundedRectangle(getLocalBounds().reduced(30).toFloat(), 12.0f, 1.5f);
+        g.setColour(juce::Colour(0xFFE2E8F0));
+        g.setFont(juce::Font(20.0f, juce::Font::bold));
+        g.drawText("Drag & drop an audio file here or click [Open Audio...]",
+                   getLocalBounds().removeFromTop(getHeight() / 2 + 10), juce::Justification::centredBottom, true);
+        g.setFont(juce::Font(14.0f, juce::Font::plain));
+        g.setColour(juce::Colour(0xFF718096));
+        g.drawText("Supported formats: WAV, FLAC, MP3, AIFF (.beatfix projects)",
+                   getLocalBounds().removeFromBottom(getHeight() / 2 - 10), juce::Justification::centredTop, true);
         return;
     }
 
@@ -146,22 +152,23 @@ void WaveformView::draw_original_lane(juce::Graphics& g, juce::Rectangle<int> bo
     g.drawText("ORIGINAL (Source)", bounds.getX() + 8, bounds.getY() + 6, 200, 16, juce::Justification::left);
 
     // Draw Waveform Peak Envelope
-    const auto& pyramid = m_session->source_pyramid();
-    if (!pyramid.empty() && bounds.getWidth() > 0) {
+    auto src = m_session->source_audio_shared();
+    if (src && !src->left.empty() && bounds.getWidth() > 0) {
         float mid_y = bounds.getY() + (bounds.getHeight() * 0.5f);
         float half_h = (bounds.getHeight() * 0.45f);
 
         g.setColour(juce::Colour(0xFF4A5568)); // Neutral envelope
 
         double sec_per_pixel = m_view_duration_sec / bounds.getWidth();
-        double sample_rate = pyramid.sample_rate();
+        double sample_rate = (src->sample_rate > 0) ? src->sample_rate : 44100.0;
+        int64_t total_samples = static_cast<int64_t>(src->left.size());
 
         for (int x = 0; x < bounds.getWidth(); ++x) {
             double t0 = m_view_start_sec + (x * sec_per_pixel);
             int64_t s_idx = static_cast<int64_t>(t0 * sample_rate);
 
-            if (s_idx >= 0 && s_idx < static_cast<int64_t>(m_session->source_audio().left.size())) {
-                float sample = m_session->source_audio().left[static_cast<size_t>(s_idx)];
+            if (s_idx >= 0 && s_idx < total_samples) {
+                float sample = src->left[static_cast<size_t>(s_idx)];
                 float y1 = mid_y - (std::abs(sample) * half_h);
                 float y2 = mid_y + (std::abs(sample) * half_h);
                 g.drawVerticalLine(bounds.getX() + x, y1, y2);
@@ -266,20 +273,21 @@ void WaveformView::draw_corrected_lane(juce::Graphics& g, juce::Rectangle<int> b
     }
 
     // Draw Class-Tinted Waveform
-    const auto& corrected = m_session->corrected_audio();
+    auto corrected = m_session->corrected_audio_shared();
     float mid_y = bounds.getY() + (bounds.getHeight() * 0.5f);
     float half_h = (bounds.getHeight() * 0.45f);
 
-    if (!corrected.is_empty() && bounds.getWidth() > 0) {
+    if (corrected && !corrected->left.empty() && m_session->is_rendered() && bounds.getWidth() > 0) {
         double sec_per_pixel = m_view_duration_sec / bounds.getWidth();
-        double sample_rate = corrected.sample_rate;
+        double sample_rate = (corrected->sample_rate > 0) ? corrected->sample_rate : 44100.0;
+        int64_t total_samples = static_cast<int64_t>(corrected->left.size());
 
         for (int x = 0; x < bounds.getWidth(); ++x) {
             double t0 = m_view_start_sec + (x * sec_per_pixel);
             int64_t t_idx = static_cast<int64_t>(t0 * sample_rate);
 
-            if (t_idx >= 0 && t_idx < static_cast<int64_t>(corrected.left.size())) {
-                float sample = corrected.left[static_cast<size_t>(t_idx)];
+            if (t_idx >= 0 && t_idx < total_samples) {
+                float sample = corrected->left[static_cast<size_t>(t_idx)];
                 float y1 = mid_y - (std::abs(sample) * half_h);
                 float y2 = mid_y + (std::abs(sample) * half_h);
 

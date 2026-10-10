@@ -1,12 +1,20 @@
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 #include <iostream>
 #include <iomanip>
 #include <string>
 #include <vector>
 #include <cstdlib>
 #include <cmath>
+#include <filesystem>
 
 #include "../../src/bf_dsp/result.h"
 #include "../../src/bf_dsp/units.h"
+#include "../../src/bf_io/path_utf8.h"
 #include "../../src/bf_io/pcm_cache.h"
 #include "../../src/bf_io/decode.h"
 #include "../../src/bf_io/export.h"
@@ -95,17 +103,19 @@ int cmd_fix(int argc, char* argv[]) {
         return 1;
     }
 
-    std::string in_path = argv[2];
-    std::string out_path = argv[3];
-
+    std::string in_path;
+    std::string out_path;
     double target_bpm = -1.0;
     bf::dsp::WarpDetent detent = bf::dsp::WarpDetent::Natural8;
     bf::dsp::StretchEngineMode mode = bf::dsp::StretchEngineMode::Smooth;
     int bit_depth = 16;
 
-    for (int i = 4; i < argc; ++i) {
+    std::vector<std::string> positionals;
+    for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--bpm" && i + 1 < argc) {
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            out_path = argv[++i];
+        } else if (arg == "--bpm" && i + 1 < argc) {
             target_bpm = std::stod(argv[++i]);
         } else if (arg == "--detent" && i + 1 < argc) {
             int d = std::stoi(argv[++i]);
@@ -115,7 +125,21 @@ int cmd_fix(int argc, char* argv[]) {
             if (m == "resample") mode = bf::dsp::StretchEngineMode::Resample;
         } else if (arg == "--bitdepth" && i + 1 < argc) {
             bit_depth = std::stoi(argv[++i]);
+        } else if (arg.rfind("-", 0) != 0) {
+            positionals.push_back(arg);
         }
+    }
+
+    if (in_path.empty() && !positionals.empty()) {
+        in_path = positionals[0];
+    }
+    if (out_path.empty() && positionals.size() >= 2) {
+        out_path = positionals[1];
+    }
+
+    if (in_path.empty() || out_path.empty()) {
+        print_usage();
+        return 1;
     }
 
     std::cout << "=== BeatFix Processing Pipeline ===\n"
@@ -235,7 +259,7 @@ int cmd_project_test(const std::string& audio_path, const std::string& proj_path
     return 0;
 }
 
-int main(int argc, char* argv[]) {
+int run_app(int argc, char* argv[]) {
     if (argc < 2) {
         print_usage();
         return 0;
@@ -255,3 +279,22 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 }
+
+#if defined(_WIN32)
+int wmain(int argc, wchar_t* w_argv[]) {
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+
+    std::vector<std::string> utf8_args(static_cast<size_t>(argc));
+    std::vector<char*> arg_ptrs(static_cast<size_t>(argc));
+    for (int i = 0; i < argc; ++i) {
+        utf8_args[static_cast<size_t>(i)] = bf::io::wide_to_utf8(w_argv[i]);
+        arg_ptrs[static_cast<size_t>(i)] = utf8_args[static_cast<size_t>(i)].data();
+    }
+    return run_app(argc, arg_ptrs.data());
+}
+#else
+int main(int argc, char* argv[]) {
+    return run_app(argc, argv);
+}
+#endif

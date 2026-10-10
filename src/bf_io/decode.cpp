@@ -8,27 +8,17 @@
 #include "../../third_party/minimp3/minimp3_ex.h"
 
 #include "decode.h"
+#include "path_utf8.h"
 #include <algorithm>
 #include <filesystem>
 #include <cmath>
 
 namespace bf::io {
 
-namespace {
-
-std::string get_extension_lower(const std::string& path) {
-    std::filesystem::path p(path);
-    std::string ext = p.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return ext;
-}
-
-} // namespace
-
 Result<AudioProbeInfo> probe_file(const std::string& file_path) {
-    if (!std::filesystem::exists(file_path)) {
+    std::filesystem::path p = path_from_utf8(file_path);
+    std::error_code ec;
+    if (!std::filesystem::exists(p, ec) || ec) {
         return Result<AudioProbeInfo>::error("File does not exist: " + file_path);
     }
 
@@ -45,10 +35,15 @@ Result<AudioProbeInfo> probe_file(const std::string& file_path) {
 
     AudioProbeInfo info;
     info.format = ext;
+    std::wstring wpath = utf8_to_wide(file_path);
 
     if (ext == ".wav" || ext == ".wave" || ext == ".aif" || ext == ".aiff") {
         drwav wav;
+#if defined(_WIN32)
+        if (!drwav_init_file_w(&wav, wpath.c_str(), nullptr)) {
+#else
         if (!drwav_init_file(&wav, file_path.c_str(), nullptr)) {
+#endif
             return Result<AudioProbeInfo>::error("Failed to parse WAV/AIFF header: " + file_path);
         }
         info.channels = static_cast<int>(wav.channels);
@@ -58,7 +53,11 @@ Result<AudioProbeInfo> probe_file(const std::string& file_path) {
         info.duration_sec = (info.sample_rate > 0) ? (static_cast<double>(info.total_frames) / info.sample_rate) : 0.0;
         drwav_uninit(&wav);
     } else if (ext == ".flac") {
+#if defined(_WIN32)
+        drflac* flac = drflac_open_file_w(wpath.c_str(), nullptr);
+#else
         drflac* flac = drflac_open_file(file_path.c_str(), nullptr);
+#endif
         if (!flac) {
             return Result<AudioProbeInfo>::error("Failed to parse FLAC header: " + file_path);
         }
@@ -70,7 +69,11 @@ Result<AudioProbeInfo> probe_file(const std::string& file_path) {
         drflac_close(flac);
     } else if (ext == ".mp3") {
         mp3dec_ex_t dec;
+#if defined(_WIN32)
+        if (mp3dec_ex_open_w(&dec, wpath.c_str(), MP3D_SEEK_TO_SAMPLE)) {
+#else
         if (mp3dec_ex_open(&dec, file_path.c_str(), MP3D_SEEK_TO_SAMPLE)) {
+#endif
             return Result<AudioProbeInfo>::error("Failed to parse MP3 file: " + file_path);
         }
         info.channels = dec.info.channels;
@@ -102,6 +105,7 @@ Result<AudioData> decode_file(const std::string& file_path) {
 
     const auto& probe = probe_res.value();
     std::string ext = get_extension_lower(file_path);
+    std::wstring wpath = utf8_to_wide(file_path);
 
     AudioData audio;
     audio.source_path = file_path;
@@ -111,7 +115,11 @@ Result<AudioData> decode_file(const std::string& file_path) {
 
     if (ext == ".wav" || ext == ".wave" || ext == ".aif" || ext == ".aiff") {
         drwav wav;
+#if defined(_WIN32)
+        if (!drwav_init_file_w(&wav, wpath.c_str(), nullptr)) {
+#else
         if (!drwav_init_file(&wav, file_path.c_str(), nullptr)) {
+#endif
             return Result<AudioData>::error("Failed to open WAV file: " + file_path);
         }
 
@@ -133,7 +141,11 @@ Result<AudioData> decode_file(const std::string& file_path) {
             }
         }
     } else if (ext == ".flac") {
+#if defined(_WIN32)
+        drflac* flac = drflac_open_file_w(wpath.c_str(), nullptr);
+#else
         drflac* flac = drflac_open_file(file_path.c_str(), nullptr);
+#endif
         if (!flac) {
             return Result<AudioData>::error("Failed to open FLAC file: " + file_path);
         }
@@ -157,7 +169,11 @@ Result<AudioData> decode_file(const std::string& file_path) {
         }
     } else if (ext == ".mp3") {
         mp3dec_ex_t dec;
+#if defined(_WIN32)
+        if (mp3dec_ex_open_w(&dec, wpath.c_str(), MP3D_SEEK_TO_SAMPLE)) {
+#else
         if (mp3dec_ex_open(&dec, file_path.c_str(), MP3D_SEEK_TO_SAMPLE)) {
+#endif
             return Result<AudioData>::error("Failed to open MP3 file: " + file_path);
         }
 

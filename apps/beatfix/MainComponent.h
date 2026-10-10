@@ -10,7 +10,9 @@
 
 namespace bf::gui {
 
-class MainComponent final : public juce::Component, public juce::Timer {
+class MainComponent final : public juce::Component,
+                            public juce::Timer,
+                            public juce::FileDragAndDropTarget {
 public:
     MainComponent();
     ~MainComponent() override;
@@ -24,11 +26,23 @@ public:
     // Timer callback for transport time and render status
     void timerCallback() override;
 
+    // File Drag and Drop Target implementation
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void fileDragEnter(const juce::StringArray& files, int x, int y) override;
+    void fileDragMove(const juce::StringArray& files, int x, int y) override;
+    void fileDragExit(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
+
+    void load_audio_file(const std::string& path);
+
 private:
     void open_file_dialog();
     void save_project_dialog();
     void update_ui_from_session();
     void trigger_render();
+
+    bool m_is_drag_hovering = false;
+    std::atomic<uint64_t> m_render_generation{0};
 
     engine::Session m_session;
     AudioPlayer m_player;

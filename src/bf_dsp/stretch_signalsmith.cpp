@@ -57,17 +57,15 @@ public:
             return Result<void>::ok();
         }
 
-        reset();
+        // Only reset stretcher state at the start of the stream
+        if (tgt_start_sec <= 0.0) {
+            reset();
+        }
 
         const bool is_stereo = (m_channels == 2 && !source_right.empty() && !out_right.empty());
-        const size_t block_size = 512;
+        const size_t block_size = 2048;
         const double fs = m_sample_rate;
         const int64_t total_src_samples = static_cast<int64_t>(source_left.size());
-
-        std::vector<float> in_block_l;
-        std::vector<float> in_block_r;
-        std::vector<float> out_block_l(block_size);
-        std::vector<float> out_block_r(block_size);
 
         size_t out_pos = 0;
         while (out_pos < num_out_samples) {
@@ -83,38 +81,42 @@ public:
             int64_t src_end = static_cast<int64_t>(std::llround(s1 * fs));
             int64_t n_in = std::max<int64_t>(0, src_end - src_start);
 
-            in_block_l.assign(static_cast<size_t>(n_in), 0.0f);
-            if (is_stereo) {
-                in_block_r.assign(static_cast<size_t>(n_in), 0.0f);
-            }
+            const float* in_ptrs[2] = { nullptr, nullptr };
 
-            for (int64_t i = 0; i < n_in; ++i) {
-                int64_t src_idx = src_start + i;
-                if (src_idx >= 0 && src_idx < total_src_samples) {
-                    in_block_l[static_cast<size_t>(i)] = source_left[static_cast<size_t>(src_idx)];
-                    if (is_stereo) {
-                        in_block_r[static_cast<size_t>(i)] = source_right[static_cast<size_t>(src_idx)];
-                    }
-                }
-            }
-
-            if (is_stereo) {
-                const float* inputs[2] = { in_block_l.data(), in_block_r.data() };
-                float* outputs[2] = { out_block_l.data(), out_block_r.data() };
-                m_stretch.process(inputs, static_cast<int>(n_in), outputs, static_cast<int>(current_block_size));
-
-                for (size_t i = 0; i < current_block_size; ++i) {
-                    out_left[out_pos + i] = out_block_l[i];
-                    out_right[out_pos + i] = out_block_r[i];
+            // Fast path: contiguous within source bounds, zero copy!
+            if (src_start >= 0 && (src_start + n_in) <= total_src_samples) {
+                in_ptrs[0] = source_left.data() + src_start;
+                if (is_stereo) {
+                    in_ptrs[1] = source_right.data() + src_start;
                 }
             } else {
-                const float* inputs[1] = { in_block_l.data() };
-                float* outputs[1] = { out_block_l.data() };
-                m_stretch.process(inputs, static_cast<int>(n_in), outputs, static_cast<int>(current_block_size));
-
-                for (size_t i = 0; i < current_block_size; ++i) {
-                    out_left[out_pos + i] = out_block_l[i];
+                // Edge case near start or end: pad via scratch buffer
+                if (m_scratch_l.size() < static_cast<size_t>(n_in)) {
+                    m_scratch_l.resize(static_cast<size_t>(n_in) * 2);
+                    if (is_stereo) m_scratch_r.resize(static_cast<size_t>(n_in) * 2);
                 }
+                std::fill_n(m_scratch_l.data(), n_in, 0.0f);
+                if (is_stereo) std::fill_n(m_scratch_r.data(), n_in, 0.0f);
+
+                for (int64_t i = 0; i < n_in; ++i) {
+                    int64_t src_idx = src_start + i;
+                    if (src_idx >= 0 && src_idx < total_src_samples) {
+                        m_scratch_l[static_cast<size_t>(i)] = source_left[static_cast<size_t>(src_idx)];
+                        if (is_stereo) {
+                            m_scratch_r[static_cast<size_t>(i)] = source_right[static_cast<size_t>(src_idx)];
+                        }
+                    }
+                }
+                in_ptrs[0] = m_scratch_l.data();
+                if (is_stereo) in_ptrs[1] = m_scratch_r.data();
+            }
+
+            if (is_stereo) {
+                float* out_ptrs[2] = { out_left.data() + out_pos, out_right.data() + out_pos };
+                m_stretch.process(in_ptrs, static_cast<int>(n_in), out_ptrs, static_cast<int>(current_block_size));
+            } else {
+                float* out_ptrs[1] = { out_left.data() + out_pos };
+                m_stretch.process(in_ptrs, static_cast<int>(n_in), out_ptrs, static_cast<int>(current_block_size));
             }
 
             out_pos += current_block_size;
@@ -125,6 +127,8 @@ public:
 
 private:
     signalsmith::stretch::SignalsmithStretch<float> m_stretch;
+    std::vector<float> m_scratch_l;
+    std::vector<float> m_scratch_r;
     int m_channels = 2;
     double m_sample_rate = 44100.0;
     bool m_prepared = false;

@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "../../src/bf_io/path_utf8.h"
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
@@ -305,14 +306,75 @@ void MainComponent::resized() {
 
 void MainComponent::paint(juce::Graphics& g) {
     g.fillAll(juce::Colour(0xFF1A1D24)); // Main UI Background
+
+    // Draw rich drag hover overlay if user drags an audio file into window
+    if (m_is_drag_hovering) {
+        auto bounds = getLocalBounds().toFloat();
+        g.setColour(juce::Colour(0xE60F172A)); // Dark backdrop with high opacity
+        g.fillRect(bounds);
+
+        auto inner = bounds.reduced(24.0f);
+        g.setColour(juce::Colour(0xFF38BDF8)); // Radiant sky blue
+        g.drawRoundedRectangle(inner, 16.0f, 3.0f);
+
+        auto top_half = inner.removeFromTop(inner.getHeight() * 0.55f);
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::Font(24.0f, juce::Font::bold));
+        g.drawText("Drop Audio File to Analyze & Fix Timing",
+                   top_half, juce::Justification::centredBottom, true);
+
+        g.setColour(juce::Colour(0xFF94A3B8));
+        g.setFont(juce::Font(15.0f, juce::Font::plain));
+        g.drawText("Supported formats: WAV, FLAC, MP3, AIFF, or .beatfix projects",
+                   inner, juce::Justification::centredTop, true);
+    }
 }
 
-void MainComponent::open_file_dialog() {
-    juce::FileChooser chooser("Select Audio File", {}, "*.wav;*.flac;*.mp3;*.aif;*.aiff");
-    if (chooser.browseForFileToOpen()) {
-        auto file = chooser.getResult();
-        std::string path = file.getFullPathName().toStdString();
+bool MainComponent::isInterestedInFileDrag(const juce::StringArray& files) {
+    for (const auto& f : files) {
+        auto ext = juce::File(f).getFileExtension().toLowerCase();
+        if (ext == ".wav" || ext == ".wave" || ext == ".flac" || ext == ".mp3" || ext == ".aif" || ext == ".aiff" || ext == ".beatfix") {
+            return true;
+        }
+    }
+    return false;
+}
 
+void MainComponent::fileDragEnter(const juce::StringArray& /*files*/, int /*x*/, int /*y*/) {
+    m_is_drag_hovering = true;
+    repaint();
+}
+
+void MainComponent::fileDragMove(const juce::StringArray& /*files*/, int /*x*/, int /*y*/) {}
+
+void MainComponent::fileDragExit(const juce::StringArray& /*files*/) {
+    m_is_drag_hovering = false;
+    repaint();
+}
+
+void MainComponent::filesDropped(const juce::StringArray& files, int /*x*/, int /*y*/) {
+    m_is_drag_hovering = false;
+    repaint();
+
+    if (!files.isEmpty()) {
+        load_audio_file(files[0].toStdString());
+    }
+}
+
+void MainComponent::load_audio_file(const std::string& path) {
+    m_player.stop();
+    m_play_pause_button.setButtonText("▶ Play");
+
+    std::string ext = bf::io::get_extension_lower(path);
+
+    if (ext == ".beatfix") {
+        auto load_res = m_session.load_project(path);
+        if (!load_res.is_ok()) {
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::AlertWindow::WarningIcon, "Load Error", load_res.error_message());
+            return;
+        }
+    } else {
         auto open_res = m_session.open_audio_file(path);
         if (!open_res.is_ok()) {
             juce::AlertWindow::showMessageBoxAsync(
@@ -326,13 +388,21 @@ void MainComponent::open_file_dialog() {
                 juce::AlertWindow::WarningIcon, "Analysis Error", ana_res.error_message());
             return;
         }
+    }
 
-        m_target_bpm_slider.setValue(m_session.target_bpm(), juce::dontSendNotification);
-        update_ui_from_session();
-        m_waveform_view.set_session(&m_session);
-        m_waveform_view.zoom_fit();
+    m_target_bpm_slider.setValue(m_session.target_bpm(), juce::dontSendNotification);
+    update_ui_from_session();
+    m_waveform_view.set_session(&m_session);
+    m_waveform_view.zoom_fit();
 
-        trigger_render();
+    trigger_render();
+}
+
+void MainComponent::open_file_dialog() {
+    juce::FileChooser chooser("Select Audio File", {}, "*.wav;*.flac;*.mp3;*.aif;*.aiff;*.beatfix");
+    if (chooser.browseForFileToOpen()) {
+        auto file = chooser.getResult();
+        load_audio_file(file.getFullPathName().toStdString());
     }
 }
 
@@ -357,7 +427,7 @@ void MainComponent::update_ui_from_session() {
     ss << p.filename().string() << " | "
        << (m_session.source_audio().channels == 2 ? "Stereo" : "Mono") << " | "
        << static_cast<int>(m_session.source_audio().sample_rate) << " Hz";
-    m_file_info_label.setText(ss.str(), juce::dontSendNotification);
+    m_file_info_label.setText(juce::String::fromUTF8(ss.str().c_str()), juce::dontSendNotification);
 
     if (m_session.is_analyzed()) {
         std::ostringstream bss;
@@ -376,20 +446,26 @@ void MainComponent::update_ui_from_session() {
         m_diag_label.setText(dss.str(), juce::dontSendNotification);
     }
 
-    m_player.set_sources(&m_session.source_audio(), &m_session.corrected_audio(), &m_session.warp_map());
+    m_player.set_sources(m_session.source_audio_shared(), m_session.corrected_audio_shared(), &m_session.warp_map());
 }
 
 void MainComponent::trigger_render() {
     m_render_fraction = 0.0;
+    const uint64_t gen = ++m_render_generation;
+
     // Launch background thread to render full corrected audio without stalling UI
-    std::thread([this] {
-        m_session.render_corrected([this](const engine::RenderProgress& prog) {
-            m_render_fraction = prog.progress_fraction;
+    std::thread([this, gen] {
+        m_session.render_corrected([this, gen](const engine::RenderProgress& prog) {
+            if (gen == m_render_generation.load()) {
+                m_render_fraction = prog.progress_fraction;
+            }
         });
-        juce::MessageManager::callAsync([this] {
-            m_render_fraction = 1.0;
-            m_player.set_sources(&m_session.source_audio(), &m_session.corrected_audio(), &m_session.warp_map());
-            m_waveform_view.repaint();
+        juce::MessageManager::callAsync([this, gen] {
+            if (gen == m_render_generation.load()) {
+                m_render_fraction = 1.0;
+                m_player.set_sources(m_session.source_audio_shared(), m_session.corrected_audio_shared(), &m_session.warp_map());
+                m_waveform_view.repaint();
+            }
         });
     }).detach();
 }

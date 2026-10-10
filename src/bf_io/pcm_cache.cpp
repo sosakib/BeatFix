@@ -1,7 +1,9 @@
 #include "pcm_cache.h"
+#include "path_utf8.h"
 #include <windows.h>
 #include <bcrypt.h>
 #include <fstream>
+#include <filesystem>
 #include <iomanip>
 #include <sstream>
 
@@ -22,7 +24,8 @@ std::string bytes_to_hex(const unsigned char* data, size_t len) {
 } // namespace
 
 Result<std::string> compute_file_sha256(const std::string& file_path) {
-    std::ifstream file(file_path, std::ios::binary);
+    std::filesystem::path p = path_from_utf8(file_path);
+    std::ifstream file(p, std::ios::binary);
     if (!file) {
         return Result<std::string>::error("Failed to open file for hashing: " + file_path);
     }

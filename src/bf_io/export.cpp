@@ -1,5 +1,6 @@
 #include "export.h"
 #include "decode.h"
+#include "path_utf8.h"
 #include "../bf_dsp/dither.h"
 #include "../../third_party/dr_libs/dr_wav.h"
 #include <windows.h>
@@ -24,22 +25,29 @@ Result<ExportReport> export_audio(
 
     // Source immutability check: prevent overwriting the source file (REQ-AUDIO-001, REQ-EXP-008)
     try {
-        if (!audio.source_path.empty() && std::filesystem::exists(audio.source_path) && std::filesystem::exists(settings.output_path)) {
-            if (std::filesystem::equivalent(audio.source_path, settings.output_path)) {
-                return Result<ExportReport>::error("Refusing to overwrite input source file: " + settings.output_path);
+        if (!audio.source_path.empty()) {
+            auto src_p = path_from_utf8(audio.source_path);
+            auto out_p = path_from_utf8(settings.output_path);
+            std::error_code ec1, ec2;
+            if (std::filesystem::exists(src_p, ec1) && std::filesystem::exists(out_p, ec2)) {
+                if (std::filesystem::equivalent(src_p, out_p, ec1)) {
+                    return Result<ExportReport>::error("Refusing to overwrite input source file: " + settings.output_path);
+                }
             }
         }
     } catch (...) {}
 
     // Ensure parent directory exists
-    std::filesystem::path out_p(settings.output_path);
+    std::filesystem::path out_p = path_from_utf8(settings.output_path);
     if (out_p.has_parent_path()) {
-        std::filesystem::create_directories(out_p.parent_path());
+        std::error_code ec;
+        std::filesystem::create_directories(out_p.parent_path(), ec);
     }
 
     // Temporary file path in same directory for atomic commit, preserving extension for re-decode
-    std::filesystem::path temp_name = out_p.stem().string() + ".tmp." + std::to_string(GetCurrentProcessId()) + out_p.extension().string();
-    std::string temp_path = (out_p.has_parent_path() ? (out_p.parent_path() / temp_name) : temp_name).string();
+    std::wstring temp_name = out_p.stem().wstring() + L".tmp." + std::to_wstring(GetCurrentProcessId()) + out_p.extension().wstring();
+    std::filesystem::path p_temp = out_p.has_parent_path() ? (out_p.parent_path() / temp_name) : std::filesystem::path(temp_name);
+    std::string temp_path = path_to_utf8(p_temp);
 
     // Measure peak and true-peak with libebur128 (REQ-AUDIO-009)
     auto loud_res = bf::dsp::measure_loudness(audio.left, audio.right, audio.sample_rate);
@@ -77,7 +85,11 @@ Result<ExportReport> export_audio(
     format.bitsPerSample = static_cast<drwav_uint32>(settings.bit_depth);
 
     drwav wav;
+#if defined(_WIN32)
+    if (!drwav_init_file_write_w(&wav, p_temp.wstring().c_str(), &format, nullptr)) {
+#else
     if (!drwav_init_file_write(&wav, temp_path.c_str(), &format, nullptr)) {
+#endif
         return Result<ExportReport>::error("Failed to open temporary file for export write: " + temp_path);
     }
 
@@ -154,8 +166,8 @@ Result<ExportReport> export_audio(
     }
 
     // Atomic rename (REQ-EXP-008)
-    std::wstring w_temp(temp_path.begin(), temp_path.end());
-    std::wstring w_target(settings.output_path.begin(), settings.output_path.end());
+    std::wstring w_temp = p_temp.wstring();
+    std::wstring w_target = out_p.wstring();
 
     BOOL move_ok = MoveFileExW(
         w_temp.c_str(),
@@ -164,7 +176,8 @@ Result<ExportReport> export_audio(
     );
 
     if (!move_ok) {
-        std::filesystem::remove(temp_path);
+        std::error_code ec;
+        std::filesystem::remove(p_temp, ec);
         return Result<ExportReport>::error("Failed to atomically finalize export file: Windows error " + std::to_string(GetLastError()));
     }
 

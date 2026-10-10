@@ -6,6 +6,35 @@ namespace bf::engine {
 
 Session::Session() {
     m_analyzer = analysis::create_dsp_beat_analyzer();
+    m_source_audio = std::make_shared<const io::AudioData>();
+    m_corrected_audio = std::make_shared<const io::AudioData>();
+}
+
+const io::AudioData& Session::source_audio() const noexcept {
+    static const io::AudioData s_empty;
+    std::lock_guard<std::mutex> lock(m_audio_mutex);
+    return m_source_audio ? *m_source_audio : s_empty;
+}
+
+const io::AudioData& Session::corrected_audio() const noexcept {
+    static const io::AudioData s_empty;
+    std::lock_guard<std::mutex> lock(m_audio_mutex);
+    return m_corrected_audio ? *m_corrected_audio : s_empty;
+}
+
+std::shared_ptr<const io::AudioData> Session::source_audio_shared() const {
+    std::lock_guard<std::mutex> lock(m_audio_mutex);
+    return m_source_audio;
+}
+
+std::shared_ptr<const io::AudioData> Session::corrected_audio_shared() const {
+    std::lock_guard<std::mutex> lock(m_audio_mutex);
+    return m_corrected_audio;
+}
+
+bool Session::is_rendered() const noexcept {
+    std::lock_guard<std::mutex> lock(m_audio_mutex);
+    return m_is_rendered && m_corrected_audio && !m_corrected_audio->is_empty();
 }
 
 Result<void> Session::open_audio_file(const std::string& file_path) {
@@ -19,27 +48,34 @@ Result<void> Session::open_audio_file(const std::string& file_path) {
         return Result<void>::error("Failed to decode file: " + decode_res.error_message());
     }
 
-    m_source_audio = decode_res.take_value();
-    m_corrected_audio = io::AudioData{};
+    auto decoded = decode_res.take_value();
 
-    std::span<const float> l_span(m_source_audio.left.data(), m_source_audio.left.size());
+    std::span<const float> l_span(decoded.left.data(), decoded.left.size());
     std::span<const float> r_span;
-    if (m_source_audio.channels == 2 && !m_source_audio.right.empty()) {
-        r_span = std::span<const float>(m_source_audio.right.data(), m_source_audio.right.size());
+    if (decoded.channels == 2 && !decoded.right.empty()) {
+        r_span = std::span<const float>(decoded.right.data(), decoded.right.size());
     }
 
-    m_source_pyramid.build_from_audio(l_span, r_span, m_source_audio.sample_rate);
+    m_source_pyramid.build_from_audio(l_span, r_span, decoded.sample_rate);
     m_corrected_pyramid = dsp::PeakPyramid{};
     m_warp_map = dsp::WarpMap{};
     m_analyzed = false;
     m_undo_stack.clear();
     m_redo_stack.clear();
 
+    {
+        std::lock_guard<std::mutex> lock(m_audio_mutex);
+        m_source_audio = std::make_shared<const io::AudioData>(std::move(decoded));
+        m_corrected_audio = std::make_shared<const io::AudioData>();
+        m_is_rendered = false;
+    }
+
     return Result<void>::ok();
 }
 
 Result<void> Session::run_analysis(std::stop_token stop_tok) {
-    if (m_source_audio.is_empty()) {
+    auto src = source_audio_shared();
+    if (!src || src->is_empty()) {
         return Result<void>::error("No audio file loaded for analysis");
     }
 
@@ -47,7 +83,7 @@ Result<void> Session::run_analysis(std::stop_token stop_tok) {
         m_analyzer = analysis::create_dsp_beat_analyzer();
     }
 
-    auto analysis_res = m_analyzer->analyze(m_source_audio, stop_tok);
+    auto analysis_res = m_analyzer->analyze(*src, stop_tok);
     if (!analysis_res.is_ok()) {
         return Result<void>::error("Analysis failed: " + analysis_res.error_message());
     }
@@ -78,8 +114,7 @@ Result<void> Session::set_detent(dsp::WarpDetent detent) {
 Result<void> Session::set_mode(dsp::StretchEngineMode mode) {
     push_undo();
     m_mode = mode;
-    // Invalidate rendered corrected audio as mode changed
-    m_corrected_audio = io::AudioData{};
+    m_is_rendered = false;
     return Result<void>::ok();
 }
 
@@ -132,14 +167,14 @@ Result<void> Session::rebuild_warp_map() {
         m_corrected_pyramid = m_source_pyramid.map_through_warp(m_warp_map);
     }
 
-    // Invalidate previously rendered audio
-    m_corrected_audio = io::AudioData{};
+    m_is_rendered = false;
 
     return Result<void>::ok();
 }
 
 Result<void> Session::render_corrected(ProgressCallback progress_cb, std::stop_token stop_tok) {
-    if (m_source_audio.is_empty()) {
+    auto src = source_audio_shared();
+    if (!src || src->is_empty()) {
         return Result<void>::error("No source audio loaded to render");
     }
 
@@ -151,7 +186,7 @@ Result<void> Session::render_corrected(ProgressCallback progress_cb, std::stop_t
     }
 
     auto render_res = m_render_scheduler.render_full(
-        m_source_audio,
+        *src,
         m_warp_map,
         m_mode,
         progress_cb,
@@ -162,45 +197,54 @@ Result<void> Session::render_corrected(ProgressCallback progress_cb, std::stop_t
         return Result<void>::error("Render failed: " + render_res.error_message());
     }
 
-    m_corrected_audio = render_res.take_value();
+    auto new_corr = std::make_shared<const io::AudioData>(render_res.take_value());
 
     // Rebuild exact corrected peak pyramid from real rendered audio
-    std::span<const float> l_span(m_corrected_audio.left.data(), m_corrected_audio.left.size());
+    std::span<const float> l_span(new_corr->left.data(), new_corr->left.size());
     std::span<const float> r_span;
-    if (m_corrected_audio.channels == 2 && !m_corrected_audio.right.empty()) {
-        r_span = std::span<const float>(m_corrected_audio.right.data(), m_corrected_audio.right.size());
+    if (new_corr->channels == 2 && !new_corr->right.empty()) {
+        r_span = std::span<const float>(new_corr->right.data(), new_corr->right.size());
     }
 
-    m_corrected_pyramid.build_from_audio(l_span, r_span, m_corrected_audio.sample_rate);
+    m_corrected_pyramid.build_from_audio(l_span, r_span, new_corr->sample_rate);
+
+    {
+        std::lock_guard<std::mutex> lock(m_audio_mutex);
+        m_corrected_audio = new_corr;
+        m_is_rendered = true;
+    }
 
     return Result<void>::ok();
 }
 
 Result<io::ExportReport> Session::export_corrected(const io::ExportSettings& settings) {
-    if (m_corrected_audio.is_empty()) {
+    auto corr = corrected_audio_shared();
+    if (!corr || corr->is_empty() || !is_rendered()) {
         auto rend_res = render_corrected();
         if (!rend_res.is_ok()) {
             return Result<io::ExportReport>::error("Cannot export: render failed: " + rend_res.error_message());
         }
+        corr = corrected_audio_shared();
     }
 
-    return io::export_audio(m_corrected_audio, settings);
+    return io::export_audio(*corr, settings);
 }
 
 Result<void> Session::save_project(const std::string& file_path) {
-    if (m_source_audio.is_empty()) {
+    auto src = source_audio_shared();
+    if (!src || src->is_empty()) {
         return Result<void>::error("Cannot save project: no audio loaded");
     }
 
     ProjectState state;
     state.schema_version = 1;
     state.algo_version = "beatfix-1.0.0";
-    state.source_path = m_source_audio.source_path;
-    state.file_hash = m_source_audio.file_hash;
-    state.pcm_hash = m_source_audio.pcm_hash;
-    state.sample_rate = m_source_audio.sample_rate;
-    state.channels = m_source_audio.channels;
-    state.total_frames = m_source_audio.total_frames;
+    state.source_path = src->source_path;
+    state.file_hash = src->file_hash;
+    state.pcm_hash = src->pcm_hash;
+    state.sample_rate = src->sample_rate;
+    state.channels = src->channels;
+    state.total_frames = src->total_frames;
 
     state.analysis = m_analysis;
     state.target_bpm = m_target_bpm;

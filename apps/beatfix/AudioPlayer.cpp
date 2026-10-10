@@ -23,10 +23,14 @@ void AudioPlayer::shutdown() {
     m_device_manager.closeAudioDevice();
 }
 
-void AudioPlayer::set_sources(const io::AudioData* source_a, const io::AudioData* source_b, const dsp::WarpMap* warp) {
+void AudioPlayer::set_sources(
+    std::shared_ptr<const io::AudioData> source_a,
+    std::shared_ptr<const io::AudioData> source_b,
+    const dsp::WarpMap* warp
+) {
     std::lock_guard<std::mutex> lock(m_source_mutex);
-    m_source_a = source_a;
-    m_source_b = source_b;
+    m_source_a = std::move(source_a);
+    m_source_b = std::move(source_b);
     m_warp = warp;
 }
 
@@ -90,8 +94,17 @@ void AudioPlayer::audioDeviceIOCallbackWithContext(
         return;
     }
 
-    std::lock_guard<std::mutex> lock(m_source_mutex);
-    if (!m_source_a && !m_source_b) {
+    std::shared_ptr<const io::AudioData> src_a;
+    std::shared_ptr<const io::AudioData> src_b;
+    const dsp::WarpMap* warp = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_source_mutex);
+        src_a = m_source_a;
+        src_b = m_source_b;
+        warp = m_warp;
+    }
+
+    if (!src_a && !src_b) {
         return;
     }
 
@@ -107,26 +120,23 @@ void AudioPlayer::audioDeviceIOCallbackWithContext(
         auto get_sample = [&](PlaybackSource src, float& l, float& r) {
             l = 0.0f;
             r = 0.0f;
-            if (src == PlaybackSource::SourceA_Original && m_source_a && !m_source_a->left.empty()) {
-                // Pos in source time
-                int64_t s_idx = static_cast<int64_t>(current_sample_time * m_source_a->sample_rate);
-                if (s_idx >= 0 && s_idx < static_cast<int64_t>(m_source_a->left.size())) {
-                    l = m_source_a->left[static_cast<size_t>(s_idx)];
-                    r = (m_source_a->channels == 2 && !m_source_a->right.empty()) ? m_source_a->right[static_cast<size_t>(s_idx)] : l;
+            if (src == PlaybackSource::SourceA_Original && src_a && !src_a->left.empty()) {
+                int64_t s_idx = static_cast<int64_t>(current_sample_time * src_a->sample_rate);
+                if (s_idx >= 0 && s_idx < static_cast<int64_t>(src_a->left.size())) {
+                    l = src_a->left[static_cast<size_t>(s_idx)];
+                    r = (src_a->channels == 2 && !src_a->right.empty()) ? src_a->right[static_cast<size_t>(s_idx)] : l;
                 }
-            } else if (src == PlaybackSource::SourceB_Corrected && m_source_b && !m_source_b->left.empty()) {
-                // Pos in target time
-                int64_t t_idx = static_cast<int64_t>(current_sample_time * m_source_b->sample_rate);
-                if (t_idx >= 0 && t_idx < static_cast<int64_t>(m_source_b->left.size())) {
-                    l = m_source_b->left[static_cast<size_t>(t_idx)];
-                    r = (m_source_b->channels == 2 && !m_source_b->right.empty()) ? m_source_b->right[static_cast<size_t>(t_idx)] : l;
+            } else if (src == PlaybackSource::SourceB_Corrected && src_b && !src_b->left.empty()) {
+                int64_t t_idx = static_cast<int64_t>(current_sample_time * src_b->sample_rate);
+                if (t_idx >= 0 && t_idx < static_cast<int64_t>(src_b->left.size())) {
+                    l = src_b->left[static_cast<size_t>(t_idx)];
+                    r = (src_b->channels == 2 && !src_b->right.empty()) ? src_b->right[static_cast<size_t>(t_idx)] : l;
                 }
-            } else if (m_source_a && !m_source_a->left.empty()) {
-                // Fallback to source A if B not yet rendered
-                int64_t s_idx = static_cast<int64_t>(current_sample_time * m_source_a->sample_rate);
-                if (s_idx >= 0 && s_idx < static_cast<int64_t>(m_source_a->left.size())) {
-                    l = m_source_a->left[static_cast<size_t>(s_idx)];
-                    r = (m_source_a->channels == 2 && !m_source_a->right.empty()) ? m_source_a->right[static_cast<size_t>(s_idx)] : l;
+            } else if (src_a && !src_a->left.empty()) {
+                int64_t s_idx = static_cast<int64_t>(current_sample_time * src_a->sample_rate);
+                if (s_idx >= 0 && s_idx < static_cast<int64_t>(src_a->left.size())) {
+                    l = src_a->left[static_cast<size_t>(s_idx)];
+                    r = (src_a->channels == 2 && !src_a->right.empty()) ? src_a->right[static_cast<size_t>(s_idx)] : l;
                 }
             }
         };
@@ -156,8 +166,8 @@ void AudioPlayer::audioDeviceIOCallbackWithContext(
         }
 
         // Metronome click track (REQ-PLY-004)
-        if (m_metronome_enabled.load(std::memory_order_relaxed) && m_warp) {
-            double click_period = 60.0 / m_warp->target_bpm();
+        if (m_metronome_enabled.load(std::memory_order_relaxed) && warp && warp->target_bpm() > 0.0) {
+            double click_period = 60.0 / warp->target_bpm();
             double beat_phase = std::fmod(current_sample_time, click_period);
             if (beat_phase >= 0.0 && beat_phase < 0.010) {
                 double t_click = beat_phase;

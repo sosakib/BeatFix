@@ -10,6 +10,7 @@
 #include "project_json.h"
 #include "render_scheduler.h"
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <stop_token>
@@ -62,8 +63,10 @@ public:
     Result<void> redo();
 
     // Accessors
-    [[nodiscard]] const io::AudioData& source_audio() const noexcept { return m_source_audio; }
-    [[nodiscard]] const io::AudioData& corrected_audio() const noexcept { return m_corrected_audio; }
+    [[nodiscard]] const io::AudioData& source_audio() const noexcept;
+    [[nodiscard]] const io::AudioData& corrected_audio() const noexcept;
+    [[nodiscard]] std::shared_ptr<const io::AudioData> source_audio_shared() const;
+    [[nodiscard]] std::shared_ptr<const io::AudioData> corrected_audio_shared() const;
     [[nodiscard]] const analysis::AnalysisResult& analysis() const noexcept { return m_analysis; }
     [[nodiscard]] const dsp::WarpMap& warp_map() const noexcept { return m_warp_map; }
     [[nodiscard]] const dsp::PeakPyramid& source_pyramid() const noexcept { return m_source_pyramid; }
@@ -73,13 +76,16 @@ public:
     [[nodiscard]] dsp::WarpDetent detent() const noexcept { return m_detent; }
     [[nodiscard]] dsp::StretchEngineMode mode() const noexcept { return m_mode; }
     [[nodiscard]] bool is_analyzed() const noexcept { return m_analyzed; }
-    [[nodiscard]] bool is_rendered() const noexcept { return !m_corrected_audio.is_empty(); }
+    [[nodiscard]] bool is_rendered() const noexcept;
 
 private:
     void push_undo();
 
-    io::AudioData m_source_audio;
-    io::AudioData m_corrected_audio;
+    std::shared_ptr<const io::AudioData> m_source_audio;
+    std::shared_ptr<const io::AudioData> m_corrected_audio;
+    mutable std::mutex m_audio_mutex;
+    bool m_is_rendered = false;
+
     analysis::AnalysisResult m_analysis;
     dsp::WarpMap m_warp_map;
     dsp::PeakPyramid m_source_pyramid;

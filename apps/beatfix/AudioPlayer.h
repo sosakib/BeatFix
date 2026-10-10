@@ -25,7 +25,11 @@ public:
     bool init();
     void shutdown();
 
-    void set_sources(const io::AudioData* source_a, const io::AudioData* source_b, const dsp::WarpMap* warp);
+    void set_sources(
+        std::shared_ptr<const io::AudioData> source_a,
+        std::shared_ptr<const io::AudioData> source_b,
+        const dsp::WarpMap* warp
+    );
 
     void play();
     void pause();
@@ -57,8 +61,8 @@ public:
 private:
     juce::AudioDeviceManager m_device_manager;
 
-    const io::AudioData* m_source_a = nullptr;
-    const io::AudioData* m_source_b = nullptr;
+    std::shared_ptr<const io::AudioData> m_source_a;
+    std::shared_ptr<const io::AudioData> m_source_b;
     const dsp::WarpMap* m_warp = nullptr;
     std::mutex m_source_mutex;
 

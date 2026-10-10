@@ -1,10 +1,10 @@
 # Build and IDE artifacts
 build/
 out/
+bin/
 .vs/
 *.user
 *.suo
-bin/
 *.pdb
 *.obj
 *.log
@@ -12,3 +12,15 @@ bin/
 .ninja_*
 ninja.log
 compile_commands.json
+
+# Scratch and test audio
+scratch/
+*.wav
+*.flac
+*.mp3
+*.aif
+*.aiff
+
+# OS files
+.DS_Store
+Thumbs.db
